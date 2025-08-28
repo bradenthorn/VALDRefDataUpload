@@ -11,7 +11,7 @@ import aiohttp
 # Import your existing helper functions
 from config import settings
 from VALDapiHelpers import get_profiles, FD_Tests_by_Profile, get_FD_results
-from token_generator import get_access_token
+from VALDapiHelpers import get_access_token
 
 # =================================================================================
 # CONFIGURATION

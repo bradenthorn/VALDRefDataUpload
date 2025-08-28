@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 import uuid
 from datetime import datetime
-from Scripts.RandomScrips.CompositeScore import calculate_composite_score_per_trial, get_best_trial, CMJ_weights
+from newcompositescore import calculate_composite_score_per_trial, get_best_trial, CMJ_weights
 from VALDapiHelpers import get_access_token, get_profiles, FD_Tests_by_Profile, get_FD_results
 import pandas_gbq
 from google.cloud import bigquery

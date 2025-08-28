@@ -10,7 +10,7 @@ import aiohttp
 import json
 
 # Import your existing helper functions
-from token_generator import get_access_token
+from VALDapiHelpers import get_access_token
 from config import settings
 from VALDapiHelpers import get_profiles, FD_Tests_by_Profile
 

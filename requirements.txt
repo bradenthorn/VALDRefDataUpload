@@ -1,11 +1,11 @@
 # VALD Reference Data Upload Project Dependencies
 # Core data processing libraries
-pandas>=1.5.0
-numpy>=1.21.0
+pandas>=2.0.0
+numpy>=1.24.0
 
 # Google Cloud Platform libraries
 google-cloud-bigquery>=3.0.0
-google-oauth2>=4.0.0
+google-auth>=2.0.0
 pandas-gbq>=0.17.0
 
 # HTTP and API libraries
