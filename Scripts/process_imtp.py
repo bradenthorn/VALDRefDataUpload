@@ -7,11 +7,18 @@ import uuid
 from datetime import datetime
 import asyncio
 import aiohttp
+import logging
 
 # Import your existing helper functions
 from config import settings
-from VALDapiHelpers import get_profiles, FD_Tests_by_Profile, get_FD_results
-from VALDapiHelpers import get_access_token
+from VALDapiHelpers import (
+    get_profiles,
+    FD_Tests_by_Profile,
+    process_json_to_pivoted_df,
+    get_access_token,
+)
+
+logger = logging.getLogger(__name__)
 
 # =================================================================================
 # CONFIGURATION
@@ -24,6 +31,12 @@ FORCEDECKS_URL = settings.vald_api.forcedecks_url
 TENANT_ID = settings.vald_api.tenant_id
 CONCURRENT_REQUESTS = 10 # Number of API calls to make at the same time
 
+METRIC_ISO_BM_REL_FORCE_PEAK = 'ISO_BM_REL_FORCE_PEAK_Trial_N_kg'
+METRIC_PEAK_VERTICAL_FORCE = 'PEAK_VERTICAL_FORCE_Trial_N'
+REQUIRED_METRIC_IDS = [
+    METRIC_ISO_BM_REL_FORCE_PEAK,
+    METRIC_PEAK_VERTICAL_FORCE,
+]
 # =================================================================================
 # REVISED: Define the schema to include the new columns
 # =================================================================================
@@ -47,9 +60,8 @@ async def fetch_single_test_result(session, test_id, token):
     try:
         async with session.get(url, headers=headers) as response:
             if response.status == 200:
-                # Note: This part calls your original synchronous function.
-                # For maximum performance, this could be rewritten to be fully async.
-                pivoted_df = get_FD_results(test_id, token)
+                test_data = await response.json()
+                pivoted_df = process_json_to_pivoted_df(test_data)
                 return test_id, pivoted_df
             else:
                 print(f"    Error fetching test {test_id}: Status {response.status}")
@@ -137,6 +149,10 @@ async def process_and_upload_all_best_imtp():
 
                 best_trial_col_name = peak_force_values.idxmax()
                 best_trial_series = pivoted_trials_df[best_trial_col_name]
+
+                missing_metrics = [m for m in REQUIRED_METRIC_IDS if m not in best_trial_series.index]
+                if missing_metrics:
+                    logger.warning(f"Test {test_id} missing metrics: {', '.join(missing_metrics)}")
                 
                 # --- REVISED: Calculate age at test safely ---
                 test_date = pd.to_datetime(test_info['modifiedDateUtc']).date()

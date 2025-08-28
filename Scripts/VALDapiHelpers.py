@@ -112,6 +112,48 @@ def unit_map(unit: str) -> str:
     }
     return _map.get(unit, unit)
 
+def process_json_to_pivoted_df(test_data):
+    """Transform raw test JSON into a pivoted DataFrame."""
+    if not test_data or not isinstance(test_data, list):
+        print("Unexpected response format")
+        return None
+
+    all_results = []
+    for trial in test_data:
+        results = trial.get("results", [])
+        for res in results:
+            flat_result = {
+                "resultId": res.get("resultId"),
+                "value": res.get("value"),
+                "time": res.get("time"),
+                "limb": res.get("limb"),
+                "repeat": res.get("repeat"),
+                "definition_id": res["definition"].get("id"),
+                "result_key": res["definition"].get("result"),
+                "description": res["definition"].get("description"),
+                "name": res["definition"].get("name"),
+                "unit": res["definition"].get("unit"),
+                "repeatable": res["definition"].get("repeatable"),
+                "asymmetry": res["definition"].get("asymmetry")
+            }
+            all_results.append(flat_result)
+
+    df = pd.DataFrame(all_results)
+    if df.empty:
+        return df
+
+    df['unit'] = df['unit'].apply(unit_map)
+    df['metric_id'] = (df['result_key'].astype(str) + '_' + df['limb'].astype(str) + '_' + df['unit'])
+    # Make metric_id BigQuery-safe by replacing '/' with '_' and removing trailing underscores
+    df['metric_id'] = df['metric_id'].str.replace('/', '_', regex=False)
+    df['metric_id'] = df['metric_id'].str.rstrip('_')
+    df['trial'] = df.groupby('metric_id').cumcount() + 1
+    pivot = df.pivot(index='metric_id', columns='trial', values='value')
+    pivot.columns = [f'trial {c}' for c in pivot.columns]
+    pivot = pivot.reset_index()
+    return pivot
+
+
 def get_FD_results(testId, token):
     url = f"{FORCEDECKS_URL}/v2019q3/teams/{TENANT_ID}/tests/{testId}/trials"
     headers = {"Authorization": f"Bearer {token}"}
@@ -119,43 +161,7 @@ def get_FD_results(testId, token):
 
     if response.status_code == 200:
         test_data = response.json()
-        if not test_data or not isinstance(test_data, list):
-            print("Unexpected response format")
-            return None
-
-        all_results = []
-        for trial in test_data:
-            results = trial.get("results", [])
-            for res in results:
-                flat_result = {
-                    "resultId": res.get("resultId"),
-                    "value": res.get("value"),
-                    "time": res.get("time"),
-                    "limb": res.get("limb"),
-                    "repeat": res.get("repeat"),
-                    "definition_id": res["definition"].get("id"),
-                    "result_key": res["definition"].get("result"),
-                    "description": res["definition"].get("description"),
-                    "name": res["definition"].get("name"),
-                    "unit": res["definition"].get("unit"),
-                    "repeatable": res["definition"].get("repeatable"),
-                    "asymmetry": res["definition"].get("asymmetry")
-                }
-                all_results.append(flat_result)
-
-        df = pd.DataFrame(all_results)
-        df['unit'] = df['unit'].apply(unit_map)
-        df['metric_id'] = (df['result_key'].astype(str) + '_' + df['limb'].astype(str) + '_' + df['unit'])
-        # Make metric_id BigQuery-safe by replacing '/' with '_' and removing trailing underscores
-        df['metric_id'] = df['metric_id'].str.replace('/', '_', regex=False)
-        df['metric_id'] = df['metric_id'].str.rstrip('_')
-        df['trial'] = df.groupby('metric_id').cumcount() + 1
-        pivot = df.pivot(index='metric_id', columns='trial', values='value')
-        pivot.columns = [f'trial {c}' for c in pivot.columns]
-        pivot = pivot.reset_index()
-        df = pivot
-        df.to_csv('test_results.csv', index=False)
-        return df
+        return process_json_to_pivoted_df(test_data)
     else:
         print(response.status_code)
 
