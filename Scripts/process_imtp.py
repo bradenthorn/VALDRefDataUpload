@@ -9,16 +9,19 @@ import asyncio
 import aiohttp
 
 # Import your existing helper functions
+from config import settings
+from VALDapiHelpers import get_profiles, FD_Tests_by_Profile, get_FD_results
 from token_generator import get_access_token
-from VALDapiHelpers import get_profiles, FD_Tests_by_Profile, get_FD_results, FORCEDECKS_URL, TENANT_ID
 
 # =================================================================================
 # CONFIGURATION
 # =================================================================================
-PROJECT_ID = "vald-ref-data"
-DATASET_ID = "athlete_performance_db"
-TABLE_ID = "imtp_results"
-CREDENTIALS_FILE = 'gcp_credentials.json'
+PROJECT_ID = settings.gcp.project_id
+DATASET_ID = settings.gcp.dataset_id
+TABLE_ID = settings.gcp.imtp_table_id
+CREDENTIALS_FILE = settings.gcp.credentials_file
+FORCEDECKS_URL = settings.vald_api.forcedecks_url
+TENANT_ID = settings.vald_api.tenant_id
 CONCURRENT_REQUESTS = 10 # Number of API calls to make at the same time
 
 # =================================================================================

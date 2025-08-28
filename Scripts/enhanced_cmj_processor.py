@@ -13,12 +13,13 @@ import pandas_gbq
 from google.cloud import bigquery
 from google.oauth2 import service_account
 import os
+from config import settings
 
 # Configuration
-CREDENTIALS_FILE = 'gcp_credentials.json'
-PROJECT_ID = 'vald-ref-data'  # Replace with your actual project ID
-DATASET_ID = 'athlete_performance_db'
-TABLE_ID = 'cmj_results'
+CREDENTIALS_FILE = settings.gcp.credentials_file
+PROJECT_ID = settings.gcp.project_id
+DATASET_ID = settings.gcp.dataset_id
+TABLE_ID = settings.gcp.cmj_table_id
 
 def upload_to_bigquery(df, table_name, table_schema=None):
     """Upload DataFrame to BigQuery with proper error handling."""

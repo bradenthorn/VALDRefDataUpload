@@ -3,18 +3,16 @@ import os
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
-from dotenv import load_dotenv
 import json
+from config import settings
 
-load_dotenv()
-FORCEDECKS_URL = os.getenv("FORCEDECKS_URL")
-DYNAMO_URL = os.getenv("DYNAMO_URL")
-PROFILE_URL = os.getenv("PROFILE_URL")
-TENANT_ID = os.getenv("TENANT_ID")
-
-CLIENT_ID = os.getenv('CLIENT_ID')
-CLIENT_SECRET = os.getenv('CLIENT_SECRET')
-AUTH_URL = os.getenv("AUTH_URL")
+FORCEDECKS_URL = settings.vald_api.forcedecks_url
+DYNAMO_URL = settings.vald_api.dynamo_url
+PROFILE_URL = settings.vald_api.profile_url
+TENANT_ID = settings.vald_api.tenant_id
+CLIENT_ID = settings.vald_api.client_id
+CLIENT_SECRET = settings.vald_api.client_secret
+AUTH_URL = settings.vald_api.auth_url
 CACHE_FILE = ".token_cache.json"
 
 def get_access_token():

@@ -13,15 +13,18 @@ import os
 
 # Import your existing helper functions
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from VALDapiHelpers import get_access_token, get_profiles, FD_Tests_by_Profile, FORCEDECKS_URL, TENANT_ID
+from VALDapiHelpers import get_access_token, get_profiles, FD_Tests_by_Profile
+from config import settings
 
 # =================================================================================
 # CONFIGURATION
 # =================================================================================
-PROJECT_ID = "vald-ref-data"
+PROJECT_ID = settings.gcp.project_id
 DATASET_ID = "athlete_performance_db"
-TABLE_ID = "ppu_results"
-CREDENTIALS_FILE = 'gcp_credentials.json'
+TABLE_ID = settings.gcp.ppu_table_id
+CREDENTIALS_FILE = settings.gcp.credentials_file
+FORCEDECKS_URL = settings.vald_api.forcedecks_url
+TENANT_ID = settings.vald_api.tenant_id
 CONCURRENT_REQUESTS = 10
 DELAY_BETWEEN_BATCHES = 2
 
