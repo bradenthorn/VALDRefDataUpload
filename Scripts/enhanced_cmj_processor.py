@@ -4,40 +4,16 @@ This script integrates composite scoring into the existing GCP pipeline for CMJ 
 """
 
 import pandas as pd
-import numpy as np
 import uuid
-from datetime import datetime
 from newcompositescore import calculate_composite_score_per_trial, get_best_trial, CMJ_weights
 from VALDapiHelpers import get_access_token, get_profiles, FD_Tests_by_Profile, get_FD_results
-import pandas_gbq
-from google.cloud import bigquery
-from google.oauth2 import service_account
-import os
 from config import settings
+from bigquery_helpers import upload_to_bigquery, bq_client
+from logging_utils import get_logger
 
 # Configuration
-CREDENTIALS_FILE = settings.gcp.credentials_file
-PROJECT_ID = settings.gcp.project_id
-DATASET_ID = settings.gcp.dataset_id
 TABLE_ID = settings.gcp.cmj_table_id
-
-def upload_to_bigquery(df, table_name, table_schema=None):
-    """Upload DataFrame to BigQuery with proper error handling."""
-    try:
-        credentials = service_account.Credentials.from_service_account_file(CREDENTIALS_FILE)
-        pandas_gbq.to_gbq(
-            df,
-            destination_table=f"{DATASET_ID}.{table_name}",
-            project_id=PROJECT_ID,
-            credentials=credentials,
-            if_exists='append',
-            table_schema=table_schema
-        )
-        print(f"Successfully uploaded {len(df)} rows to {table_name}")
-        return True
-    except Exception as e:
-        print(f"Error uploading to BigQuery: {e}")
-        return False
+logger = get_logger(__name__)
 
 def process_cmj_test_with_composite(test_id, token, assessment_id):
     """
@@ -53,11 +29,11 @@ def process_cmj_test_with_composite(test_id, token, assessment_id):
     """
     
     # Fetch raw CMJ data
-    print(f"Fetching CMJ data for test {test_id}...")
+    logger.info("Fetching CMJ data for test %s...", test_id)
     raw_data = get_FD_results(test_id, token)
 
     if raw_data is None or raw_data.empty:
-        print(f"No data found for test {test_id}")
+        logger.info("No data found for test %s", test_id)
         return None, None
     
     # Filter for CMJ-specific metrics
@@ -83,13 +59,13 @@ def process_cmj_test_with_composite(test_id, token, assessment_id):
     cmj_data = raw_data[raw_data['metric_id'].isin(cmj_metrics)]
     
     if cmj_data.empty:
-        print(f"No CMJ metrics found for test {test_id}")
+        logger.info("No CMJ metrics found for test %s", test_id)
         return None, None
     
     # Pivot data to get trials as columns
     trial_cols = [col for col in cmj_data.columns if 'trial' in col.lower()]
     if not trial_cols:
-        print(f"No trial data found for test {test_id}")
+        logger.info("No trial data found for test %s", test_id)
         return None, None
     
     # Create pivot table with metrics as index and trials as columns
@@ -97,14 +73,14 @@ def process_cmj_test_with_composite(test_id, token, assessment_id):
     if not isinstance(pivot_data, pd.DataFrame):
         pivot_data = pd.DataFrame(pivot_data)
     # DEBUG: Print available metric names
-    print(f"[DEBUG] Available metrics in pivot_data for test {test_id}: {list(pivot_data.index)}")
+    logger.debug("Available metrics in pivot_data for test %s: %s", test_id, list(pivot_data.index))
     # Calculate composite scores per trial
     best_trial_col, best_score, composite_scores, best_metrics = get_best_trial(pivot_data)
     if best_trial_col is None:
-        print(f"No valid composite scores for test {test_id}")
+        logger.info("No valid composite scores for test %s", test_id)
         return None, None
     # DEBUG: Print best_metrics dict
-    print(f"[DEBUG] best_metrics for test {test_id}: {best_metrics}")
+    logger.debug("best_metrics for test %s: %s", test_id, best_metrics)
     # Prepare DataFrame for upload using best_metrics dict
     # Only upload metrics in CMJ_weights
     required_metrics = list(CMJ_weights.keys())
@@ -153,17 +129,17 @@ def process_all_cmj_tests_for_athlete(profile_id: str, token: str, assessment_id
     tests_df = FD_Tests_by_Profile(start_date, profile_id, token)
     
     if tests_df is None or tests_df.empty:
-        print(f"No tests found for profile {profile_id}")
+        logger.info("No tests found for profile %s", profile_id)
         return []
     
     # Filter for CMJ tests
     cmj_tests = tests_df[tests_df['testType']== 'CMJ']
     
     if cmj_tests.empty:
-        print(f"No CMJ tests found for profile {profile_id}")
+        logger.info("No CMJ tests found for profile %s", profile_id)
         return []
     
-    print(f"Found {len(cmj_tests)} CMJ tests for profile {profile_id}")
+    logger.info("Found %d CMJ tests for profile %s", len(cmj_tests), profile_id)
     
     processed_results = []
     
@@ -171,7 +147,7 @@ def process_all_cmj_tests_for_athlete(profile_id: str, token: str, assessment_id
         test_id = test_row['testId']
         test_date = pd.to_datetime(test_row['modifiedDateUtc']).date()
 
-        print(f"Processing CMJ test {test_id} from {test_date}...")
+        logger.info("Processing CMJ test %s from %s...", test_id, test_date)
 
         # Process the test
         gcp_data, gcp_schema = process_cmj_test_with_composite(test_id, token, assessment_id)
@@ -180,9 +156,9 @@ def process_all_cmj_tests_for_athlete(profile_id: str, token: str, assessment_id
         if isinstance(gcp_data, pd.DataFrame) and not gcp_data.empty:
             gcp_data['athlete_name'] = athlete_name
             processed_results.append(gcp_data)
-            print(f"Successfully processed test {test_id}")
+            logger.info("Successfully processed test %s", test_id)
         else:
-            print(f"Failed to process test {test_id}")
+            logger.warning("Failed to process test %s", test_id)
     
     return processed_results
 
@@ -190,29 +166,26 @@ def main_pipeline():
     """
     Main pipeline to process CMJ data with composite scoring for all athletes.
     """
-    
-    # Authentication
-    try:
-        credentials = service_account.Credentials.from_service_account_file(CREDENTIALS_FILE)
-        print("Successfully loaded GCP credentials.")
-    except Exception as e:
-        print(f"ERROR: Could not load credentials. {e}")
+
+    # Ensure BigQuery client is available
+    if bq_client is None:
+        logger.error("BigQuery client not available. Exiting.")
         return
     
     # Get access token
     token = get_access_token()
     if not token:
-        print("Failed to get access token")
+        logger.error("Failed to get access token")
         return
     
     # Fetch all athlete profiles
-    print("Fetching athlete profiles...")
+    logger.info("Fetching athlete profiles...")
     profiles = get_profiles(token)
     if profiles.empty:
-        print("No profiles found. Exiting.")
+        logger.info("No profiles found. Exiting.")
         return
     
-    print(f"Found {len(profiles)} athlete profiles")
+    logger.info("Found %d athlete profiles", len(profiles))
     
     # Only process the first 10 athletes
     profiles = profiles.head(10)
@@ -224,7 +197,7 @@ def main_pipeline():
         profile_id = str(athlete['profileId'])
         athlete_name = str(athlete['fullName'])
         
-        print(f"\nProcessing athlete {index + 1}/{len(profiles)}: {athlete_name}")
+        logger.info("Processing athlete %d/%d: %s", index + 1, len(profiles), athlete_name)
         
         # Create assessment ID for this athlete
         assessment_id = str(uuid.uuid4())
@@ -234,19 +207,19 @@ def main_pipeline():
         
         if athlete_results:
             all_results.extend(athlete_results)
-            print(f"Processed {len(athlete_results)} CMJ tests for {athlete_name}")
+            logger.info("Processed %d CMJ tests for %s", len(athlete_results), athlete_name)
         else:
-            print(f"No CMJ tests processed for {athlete_name}")
+            logger.info("No CMJ tests processed for %s", athlete_name)
         
         # Add delay to avoid rate limiting
         if index < len(profiles) - 1:
-            print("Waiting 2 seconds before next athlete...")
+            logger.info("Waiting 2 seconds before next athlete...")
             import time
             time.sleep(2)
     
     # After collecting all_results and before upload
     if all_results:
-        print(f"\nUploading {len(all_results)} total CMJ results to BigQuery...")
+        logger.info("Uploading %d total CMJ results to BigQuery...", len(all_results))
         combined_df = pd.concat(all_results, ignore_index=True)
         # Normalize composite scores to 50-100 scale
         min_score = combined_df['cmj_composite_score'].min()
@@ -263,24 +236,20 @@ def main_pipeline():
         }
         combined_df.rename(columns=rename_map, inplace=True)
         # Print debug info before upload
-        print("[DEBUG] Columns in combined_df before upload:", combined_df.columns.tolist())
-        print("[DEBUG] First 5 rows of combined_df:")
-        print(combined_df.head())
+        logger.debug("Columns in combined_df before upload: %s", combined_df.columns.tolist())
+        logger.debug("First 5 rows of combined_df:")
+        logger.debug("%s", combined_df.head())
         # Upload all columns (including metrics and composite score)
         upload_to_bigquery(combined_df, TABLE_ID)
         
         # Print summary statistics
-        print("\nSummary Statistics:")
-        print(f"Average Composite Score: {combined_df['cmj_composite_score'].mean():.3f}")
-        print(f"Best Composite Score: {combined_df['cmj_composite_score'].max():.3f}")
+        logger.info("Summary Statistics:")
+        logger.info("Average Composite Score: %.3f", combined_df["cmj_composite_score"].mean())
+        logger.info("Best Composite Score: %.3f", combined_df["cmj_composite_score"].max())
         # print(f"Number of athletes with data: {combined_df['profile_id'].nunique()}")  # Removed, not in schema
-        print(f"Total tests processed: {len(combined_df)}")
+        logger.info("Total tests processed: %d", len(combined_df))
     else:
-        print("No CMJ results to upload")
+        logger.info("No CMJ results to upload")
 
 if __name__ == "__main__":
-    # Check if credentials file exists
-    if not os.path.exists(CREDENTIALS_FILE):
-        print(f"ERROR: {CREDENTIALS_FILE} not found. Please ensure your GCP credentials are in place.")
-    else:
-        main_pipeline() 
+    main_pipeline()

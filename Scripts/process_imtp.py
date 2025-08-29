@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 import asyncio
 import aiohttp
-import logging
+from logging_utils import get_logger
 
 # Import your existing helper functions
 from config import settings
@@ -15,7 +15,7 @@ from VALDapiHelpers import (
 )
 from bigquery_helpers import upload_to_bigquery, bq_client
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # =================================================================================
 # CONFIGURATION
@@ -60,14 +60,16 @@ async def fetch_single_test_result(session, test_id, token):
                         test_data = await retry_response.json()
                         pivoted_df = process_json_to_pivoted_df(test_data)
                         return test_id, pivoted_df
-                    print(
-                        f"    Error fetching test {test_id}: Status {retry_response.status} after token refresh"
+                    logger.error(
+                        "Error fetching test %s: Status %s after token refresh",
+                        test_id,
+                        retry_response.status,
                     )
                     return test_id, None
-            print(f"    Error fetching test {test_id}: Status {response.status}")
+            logger.error("Error fetching test %s: Status %s", test_id, response.status)
             return test_id, None
     except Exception as e:
-        print(f"    Exception fetching test {test_id}: {e}")
+        logger.error("Exception fetching test %s: %s", test_id, e)
         return test_id, None
 
 # =================================================================================
@@ -80,16 +82,16 @@ async def process_and_upload_all_best_imtp():
     """
     # --- Step 1: Authentication and Setup (Synchronous) ---
     if bq_client is None:
-        print("BigQuery client not available. Cannot upload.")
+        logger.error("BigQuery client not available. Cannot upload.")
         return
     
-    print("Fetching access token...")
+    logger.info("Fetching access token...")
     token = get_access_token()
 
-    print("Fetching all athlete profiles...")
+    logger.info("Fetching all athlete profiles...")
     profiles = get_profiles(token)
     if profiles.empty:
-        print("No profiles found. Exiting.")
+        logger.info("No profiles found. Exiting.")
         return
 
     # --- Step 2: Collect all IMTP test sessions from all athletes (Synchronous) ---
@@ -104,10 +106,10 @@ async def process_and_upload_all_best_imtp():
                 all_imtp_test_sessions.append({'athlete': athlete, 'test': test_session})
     
     if not all_imtp_test_sessions:
-        print("No IMTP tests found across all profiles.")
+        logger.info("No IMTP tests found across all profiles.")
         return
         
-    print(f"\nFound a total of {len(all_imtp_test_sessions)} IMTP tests to process.")
+    logger.info("Found a total of %d IMTP tests to process.", len(all_imtp_test_sessions))
 
     # --- Step 3: Fetch all test results concurrently (Asynchronous) ---
     all_best_trials_for_upload = []
@@ -174,16 +176,16 @@ async def process_and_upload_all_best_imtp():
                     'PEAK_VERTICAL_FORCE_Trial_N': pd.to_numeric(best_trial_series.get('PEAK_VERTICAL_FORCE_Trial_N'), errors='coerce')
                 }
                 all_best_trials_for_upload.append(final_record)
-                print(f"  Processed best trial for {athlete_info['fullName']} on {test_date}.")
+                logger.info("Processed best trial for %s on %s.", athlete_info['fullName'], test_date)
 
     # --- Step 5: Upload all results at once (Synchronous) ---
     if not all_best_trials_for_upload:
-        print("\nNo valid best trials found to upload.")
+        logger.info("No valid best trials found to upload.")
         return
 
     final_df = pd.DataFrame(all_best_trials_for_upload)
 
-    print(f"\nUploading {len(final_df)} total best trials to BigQuery table '{TABLE_ID}'...")
+    logger.info("Uploading %d total best trials to BigQuery table '%s'...", len(final_df), TABLE_ID)
     upload_to_bigquery(final_df, TABLE_ID)
 
 # =================================================================================

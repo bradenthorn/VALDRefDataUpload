@@ -1,15 +1,16 @@
 import pandas as pd
-import numpy as np
 import uuid
 from datetime import datetime
 import asyncio
 import aiohttp
+from logging_utils import get_logger
 
 # Import your existing helper functions
-from VALDapiHelpers import get_access_token
-from VALDapiHelpers import get_profiles, FD_Tests_by_Profile
+from VALDapiHelpers import get_profiles, FD_Tests_by_Profile, get_access_token
 from config import settings
 from bigquery_helpers import upload_to_bigquery, bq_client
+
+logger = get_logger(__name__)
 
 # =================================================================================
 # CONFIGURATION
@@ -67,10 +68,10 @@ async def fetch_and_process_single_test(session, test_id, token):
                 pivoted_df = process_json_to_pivoted_df(json_data)
                 return test_id, pivoted_df
             else:
-                print(f"    Error fetching test {test_id}: Status {response.status}")
+                logger.error("Error fetching test %s: Status %s", test_id, response.status)
                 return test_id, None
     except Exception as e:
-        print(f"    Exception fetching test {test_id}: {e}")
+        logger.error("Exception fetching test %s: %s", test_id, e)
         return test_id, None
 
 # =================================================================================
@@ -79,14 +80,14 @@ async def fetch_and_process_single_test(session, test_id, token):
 async def main_pipeline():
     """Main asynchronous pipeline to fetch, process, and upload all HJ tests."""
     if bq_client is None:
-        print("ERROR: BigQuery client not available. Exiting.")
+        logger.error("BigQuery client not available. Exiting.")
         return
 
     token = get_access_token()
-    print("Fetching all athlete profiles...")
+    logger.info("Fetching all athlete profiles...")
     profiles = get_profiles(token)
     if profiles.empty:
-        print("No profiles found. Exiting.")
+        logger.info("No profiles found. Exiting.")
         return
 
     # =================================================================================
@@ -96,7 +97,7 @@ async def main_pipeline():
 
     # --- Step 2: Collect all HJ test sessions ---
     all_hj_test_sessions = []
-    print("Collecting all HJ test sessions for the selected athletes...")
+    logger.info("Collecting all HJ test sessions for the selected athletes...")
     for index, athlete in profiles.iterrows():
         if index > 0 and index % 50 == 0:
              token = get_access_token()
@@ -107,10 +108,10 @@ async def main_pipeline():
                 all_hj_test_sessions.append({'athlete': athlete, 'test': test_session})
     
     if not all_hj_test_sessions:
-        print("No Hop Jump tests found for the selected athletes.")
+        logger.info("No Hop Jump tests found for the selected athletes.")
         return
-        
-    print(f"\nFound a total of {len(all_hj_test_sessions)} HJ tests to process.")
+
+    logger.info("Found a total of %d HJ tests to process.", len(all_hj_test_sessions))
 
     # --- Step 3: Fetch all test results concurrently ---
     all_best_rsi_averages = []
@@ -146,7 +147,7 @@ async def main_pipeline():
                     contact_time_row = pivoted_trials_df.loc[pivoted_trials_df.index.str.contains('HOP_CONTACT_TIME')]
 
                     if flight_time_row.empty or contact_time_row.empty:
-                        print(f"  Skipping test {test_id}: Missing Flight Time or Contact Time.")
+                        logger.warning("Skipping test %s: Missing Flight Time or Contact Time.", test_id)
                         continue
 
                     # Extract the trial values as numeric series
@@ -159,11 +160,11 @@ async def main_pipeline():
                     rsi_per_trial = (flight_times / contact_times).dropna()
                     
                 except (KeyError, IndexError):
-                    print(f"  Skipping test {test_id}: Could not find required metrics for RSI calculation.")
+                    logger.warning("Skipping test %s: Could not find required metrics for RSI calculation.", test_id)
                     continue
-                
+
                 if rsi_per_trial.empty:
-                    print(f"  Skipping test {test_id}: No valid trials to calculate RSI.")
+                    logger.warning("Skipping test %s: No valid trials to calculate RSI.", test_id)
                     continue
 
                 # Now, find the average of the 5 best *correctly calculated* RSI values
@@ -182,19 +183,33 @@ async def main_pipeline():
                     'hop_rsi_avg_best_5': avg_of_best_5_rsi
                 }
                 all_best_rsi_averages.append(final_record)
-                print(f"  Successfully processed HJ for {athlete_info['fullName']} on {test_date}. Avg RSI: {avg_of_best_5_rsi:.2f}")
+                logger.info(
+                    "Processed HJ for %s on %s. Avg RSI: %.2f",
+                    athlete_info['fullName'],
+                    test_date,
+                    avg_of_best_5_rsi,
+                )
 
-            print(f"\n--- Batch {i//CONCURRENT_REQUESTS + 1} of {len(all_hj_test_sessions)//CONCURRENT_REQUESTS + 1} complete. Pausing for {DELAY_BETWEEN_BATCHES} seconds... ---\n")
+            logger.info(
+                "Batch %d of %d complete. Pausing for %d seconds...",
+                i // CONCURRENT_REQUESTS + 1,
+                len(all_hj_test_sessions) // CONCURRENT_REQUESTS + 1,
+                DELAY_BETWEEN_BATCHES,
+            )
             await asyncio.sleep(DELAY_BETWEEN_BATCHES)
 
     # --- Step 5: Upload all results at once ---
     if not all_best_rsi_averages:
-        print("\nNo valid HJ results found to upload after processing all batches.")
+        logger.info("No valid HJ results found to upload after processing all batches.")
         return
 
     final_df = pd.DataFrame(all_best_rsi_averages)
 
-    print(f"\nUploading {len(final_df)} total best HJ results to BigQuery table '{TABLE_ID}'...")
+    logger.info(
+        "Uploading %d total best HJ results to BigQuery table '%s'...",
+        len(final_df),
+        TABLE_ID,
+    )
     upload_to_bigquery(final_df, TABLE_ID)
 
 # =================================================================================

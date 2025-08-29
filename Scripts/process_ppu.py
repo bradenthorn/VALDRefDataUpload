@@ -1,21 +1,16 @@
 import pandas as pd
-import numpy as np
 import uuid
 from datetime import datetime
 import asyncio
 import aiohttp
-import json
-import sys
-import os
-import logging
+from logging_utils import get_logger
 
 # Import your existing helper functions
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from VALDapiHelpers import get_access_token, get_profiles, FD_Tests_by_Profile
 from config import settings
 from bigquery_helpers import upload_to_bigquery, bq_client
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # =================================================================================
 # CONFIGURATION
@@ -119,10 +114,10 @@ async def fetch_and_process_single_test(session, test_id, token):
                 pivoted_df = process_json_to_pivoted_df(json_data)
                 return test_id, pivoted_df
             else:
-                print(f"    Error fetching test {test_id}: Status {response.status}")
+                logger.error("Error fetching test %s: Status %s", test_id, response.status)
                 return test_id, None
     except Exception as e:
-        print(f"    Exception fetching test {test_id}: {e}")
+        logger.error("Exception fetching test %s: %s", test_id, e)
         return test_id, None
 
 # =================================================================================
@@ -131,21 +126,21 @@ async def fetch_and_process_single_test(session, test_id, token):
 async def main_pipeline():
     """Main asynchronous pipeline to fetch, process, and upload all PPU tests."""
     if bq_client is None:
-        print("BigQuery client not available. Cannot upload.")
+        logger.error("BigQuery client not available. Cannot upload.")
         return
 
     token = get_access_token()
-    print("Fetching all athlete profiles...")
+    logger.info("Fetching all athlete profiles...")
     profiles = get_profiles(token)
     if profiles.empty:
-        print("No profiles found. Exiting.")
+        logger.info("No profiles found. Exiting.")
         return
 
-    print("--- RUNNING IN TEST MODE: PROCESSING ALL ATHLETES ---")
+    logger.info("--- RUNNING IN TEST MODE: PROCESSING ALL ATHLETES ---")
     # profiles = profiles.head(50)  # Remove this line to process all athletes
 
     all_ppu_test_sessions = []
-    print("Collecting all PPU test sessions for the selected athletes...")
+    logger.info("Collecting all PPU test sessions for the selected athletes...")
     # Ensure profiles is a pandas DataFrame before iterating
     if not isinstance(profiles, pd.DataFrame):
         profiles = pd.DataFrame(profiles)
@@ -161,10 +156,10 @@ async def main_pipeline():
                 all_ppu_test_sessions.append({'athlete': athlete, 'test': test_session})
     
     if not all_ppu_test_sessions:
-        print("No PPU tests found for the selected athletes.")
+        logger.info("No PPU tests found for the selected athletes.")
         return
-        
-    print(f"\nFound a total of {len(all_ppu_test_sessions)} PPU tests to process.")
+
+    logger.info("Found a total of %d PPU tests to process.", len(all_ppu_test_sessions))
 
     all_best_trials_for_upload = []
     async with aiohttp.ClientSession() as session:
@@ -189,7 +184,10 @@ async def main_pipeline():
                 
                 peak_force_metric = next((m for m in pivoted_trials_df.index if 'PEAK_CONCENTRIC_FORCE' in m and 'kg' not in m and 'Asym' not in m), None)
                 if not peak_force_metric:
-                    print(f"  Skipping test {test_id}: Could not find the absolute Peak Concentric Force metric.")
+                    logger.warning(
+                        "Skipping test %s: Could not find the absolute Peak Concentric Force metric.",
+                        test_id,
+                    )
                     continue
 
                 peak_force_row = pivoted_trials_df.loc[peak_force_metric]
@@ -226,13 +224,18 @@ async def main_pipeline():
                         if 1920 < dob.year < datetime.now().year:
                             age_at_test = test_date.year - dob.year - ((test_date.month, test_date.day) < (dob.month, dob.day))
                     except Exception as e:
-                        print(f"Could not parse date_of_birth '{date_of_birth}' for athlete {getattr(athlete_info, 'fullName', None)}: {e}")
+                        logger.warning(
+                            "Could not parse date_of_birth '%s' for athlete %s: %s",
+                            date_of_birth,
+                            getattr(athlete_info, 'fullName', None),
+                            e,
+                        )
+
 
                 def get_metric_value(exact_metric_id):
                     metric = sanitize_metric_id(exact_metric_id)
                     value = best_trial_series.get(metric)
-                    print(f"Looking for metric: {metric}, value: {value}")
-                    logger.debug(f"Looking for metric: {exact_metric_id}, value: {value}")
+                    logger.debug("Looking for metric: %s, value: %s", metric, value)
                     return pd.to_numeric(value, errors='coerce') if value is not None else None
 
                 # Build the final record with mapped BigQuery column names
@@ -247,13 +250,21 @@ async def main_pipeline():
                 for metric_id, bq_col in METRIC_ID_TO_BQ_COL.items():
                     final_record[bq_col] = get_metric_value(metric_id)
                 all_best_trials_for_upload.append(final_record)
-                print(f"  Successfully processed PPU for {getattr(athlete_info, 'fullName', None)} on {test_date}.")
+                logger.info(
+                    "Processed PPU for %s on %s.",
+                    getattr(athlete_info, 'fullName', None),
+                    test_date,
+                )
 
-            print(f"\n--- Batch {i//CONCURRENT_REQUESTS + 1} complete. Pausing for {DELAY_BETWEEN_BATCHES} seconds... ---\n")
+            logger.info(
+                "Batch %d complete. Pausing for %d seconds...",
+                i // CONCURRENT_REQUESTS + 1,
+                DELAY_BETWEEN_BATCHES,
+            )
             await asyncio.sleep(DELAY_BETWEEN_BATCHES)
 
     if not all_best_trials_for_upload:
-        print("\nNo valid PPU results found to upload.")
+        logger.info("No valid PPU results found to upload.")
         return
 
     final_df = pd.DataFrame(all_best_trials_for_upload)
@@ -271,7 +282,11 @@ async def main_pipeline():
     ]
     final_df = final_df[[col for col in BQ_COLS if col in final_df.columns]]
 
-    # Call the new, more robust upload function
+    logger.info(
+        "Uploading %d PPU results to BigQuery table '%s'...",
+        len(final_df),
+        TABLE_ID,
+    )
     upload_to_bigquery(final_df, TABLE_ID)
 
 # =================================================================================
