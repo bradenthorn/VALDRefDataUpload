@@ -54,7 +54,11 @@ IMTP_RESULTS_SCHEMA = [
 # Asynchronous function to fetch a single test result
 # =================================================================================
 async def fetch_single_test_result(session, test_id, token):
-    """Asynchronously fetches results for a single test ID."""
+    """Asynchronously fetches results for a single test ID.
+
+    If the request returns a 401 (Unauthorized), a new access token is
+    fetched and the request is retried once.
+    """
     url = f"{FORCEDECKS_URL}/v2019q3/teams/{TENANT_ID}/tests/{test_id}/trials"
     headers = {"Authorization": f"Bearer {token}"}
     try:
@@ -63,9 +67,21 @@ async def fetch_single_test_result(session, test_id, token):
                 test_data = await response.json()
                 pivoted_df = process_json_to_pivoted_df(test_data)
                 return test_id, pivoted_df
-            else:
-                print(f"    Error fetching test {test_id}: Status {response.status}")
-                return test_id, None
+            if response.status == 401:
+                # Token might be expired; refresh and retry once
+                refreshed_token = get_access_token()
+                retry_headers = {"Authorization": f"Bearer {refreshed_token}"}
+                async with session.get(url, headers=retry_headers) as retry_response:
+                    if retry_response.status == 200:
+                        test_data = await retry_response.json()
+                        pivoted_df = process_json_to_pivoted_df(test_data)
+                        return test_id, pivoted_df
+                    print(
+                        f"    Error fetching test {test_id}: Status {retry_response.status} after token refresh"
+                    )
+                    return test_id, None
+            print(f"    Error fetching test {test_id}: Status {response.status}")
+            return test_id, None
     except Exception as e:
         print(f"    Exception fetching test {test_id}: {e}")
         return test_id, None
@@ -115,11 +131,15 @@ async def process_and_upload_all_best_imtp():
     # --- Step 3: Fetch all test results concurrently (Asynchronous) ---
     all_best_trials_for_upload = []
     async with aiohttp.ClientSession() as session:
-        tasks = [fetch_single_test_result(session, session_info['test']['testId'], token) for session_info in all_imtp_test_sessions]
-        
-        for i in range(0, len(tasks), CONCURRENT_REQUESTS):
-            batch_tasks = tasks[i:i+CONCURRENT_REQUESTS]
-            results = await asyncio.gather(*batch_tasks)
+        for i in range(0, len(all_imtp_test_sessions), CONCURRENT_REQUESTS):
+            # Refresh the access token before each batch to avoid expiration
+            token = get_access_token()
+            batch_sessions = all_imtp_test_sessions[i:i+CONCURRENT_REQUESTS]
+            tasks = [
+                fetch_single_test_result(session, session_info['test']['testId'], token)
+                for session_info in batch_sessions
+            ]
+            results = await asyncio.gather(*tasks)
             
             # --- Step 4: Process the results from the completed batch ---
             for test_id, pivoted_trials_df in results:

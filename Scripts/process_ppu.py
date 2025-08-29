@@ -10,11 +10,14 @@ import aiohttp
 import json
 import sys
 import os
+import logging
 
 # Import your existing helper functions
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from VALDapiHelpers import get_access_token, get_profiles, FD_Tests_by_Profile
 from config import settings
+
+logger = logging.getLogger(__name__)
 
 # =================================================================================
 # CONFIGURATION
@@ -43,16 +46,23 @@ UNIT_MAP = {
     "Inch": "in"
 }
 
+# Helper to ensure consistent metric_id formatting
+def sanitize_metric_id(metric_id):
+    """Return a metric_id with `/` and `.` replaced by underscores."""
+    if not isinstance(metric_id, str):
+        return metric_id
+    return metric_id.replace('/', '_').replace('.', '_')
+
 # Mapping from metric_id to BigQuery column names
 METRIC_ID_TO_BQ_COL = {
-    'ECCENTRIC_BRAKING_RFD_Trial_N_s_s': 'ECCENTRIC_BRAKING_RFD_Trial_N_s_',
-    'MEAN_ECCENTRIC_FORCE_Asym_Trial_N': 'MEAN_ECCENTRIC_FORCE_Asym_N',
-    'MEAN_TAKEOFF_FORCE_Asym_Trial_N': 'MEAN_TAKEOFF_FORCE_Asym_N',
-    'PEAK_CONCENTRIC_FORCE_Asym_Trial_N': 'PEAK_CONCENTRIC_FORCE_Asym_N',
-    'PEAK_CONCENTRIC_FORCE_Trial_N': 'PEAK_CONCENTRIC_FORCE_Trial_N',
-    'PEAK_ECCENTRIC_FORCE_Asym_Trial_N': 'PEAK_ECCENTRIC_FORCE_Asym_N',
-    'RELATIVE_PEAK_CONCENTRIC_FORCE_Trial_N_s_kg': 'RELATIVE_PEAK_CONCENTRIC_FORCE_Trial_N_kg',
-    'CONCENTRIC_DURATION_Trial_ms': 'CONCENTRIC_DURATION_Trial_ms',
+    sanitize_metric_id('ECCENTRIC_BRAKING_RFD_Trial_N/s'): 'ECCENTRIC_BRAKING_RFD_Trial_N_s',
+    sanitize_metric_id('MEAN_ECCENTRIC_FORCE_Asym_Trial_N'): 'MEAN_ECCENTRIC_FORCE_Asym_N',
+    sanitize_metric_id('MEAN_TAKEOFF_FORCE_Asym_Trial_N'): 'MEAN_TAKEOFF_FORCE_Asym_N',
+    sanitize_metric_id('PEAK_CONCENTRIC_FORCE_Asym_Trial_N'): 'PEAK_CONCENTRIC_FORCE_Asym_N',
+    sanitize_metric_id('PEAK_CONCENTRIC_FORCE_Trial_N'): 'PEAK_CONCENTRIC_FORCE_Trial_N',
+    sanitize_metric_id('PEAK_ECCENTRIC_FORCE_Asym_Trial_N'): 'PEAK_ECCENTRIC_FORCE_Asym_N',
+    sanitize_metric_id('RELATIVE_PEAK_CONCENTRIC_FORCE_Trial_N/kg'): 'RELATIVE_PEAK_CONCENTRIC_FORCE_Trial_N_kg',
+    sanitize_metric_id('CONCENTRIC_DURATION_Trial_ms'): 'CONCENTRIC_DURATION_Trial_ms',
 }
 
 # =================================================================================
@@ -126,6 +136,7 @@ def process_json_to_pivoted_df(test_data_json):
                 metric_id = f"{result_key}_Trial_{unit}"
             else:
                 metric_id = f"{result_key}_{limb}_Trial_{unit}"
+            metric_id = sanitize_metric_id(metric_id)
             flat_result = {
                 "value": res.get("value"),
                 "limb": limb,
@@ -248,8 +259,8 @@ async def main_pipeline():
                 best_trial_col_name = peak_force_values.idxmax()
                 best_trial_series = pivoted_trials_df[best_trial_col_name]
                 
-                best_trial_series.index = best_trial_series.index.str.replace('/', '_s_').str.replace('.', '_')
-                print(f"DEBUG: best_trial_series.index after replacements: {list(best_trial_series.index)}")
+                best_trial_series.index = best_trial_series.index.map(sanitize_metric_id)
+                logger.debug(f"DEBUG: best_trial_series.index after replacements: {list(best_trial_series.index)}")
 
                 test_date = pd.to_datetime(test_info['modifiedDateUtc']).date()
                 age_at_test = None
@@ -264,8 +275,10 @@ async def main_pipeline():
                         print(f"Could not parse date_of_birth '{date_of_birth}' for athlete {getattr(athlete_info, 'fullName', None)}: {e}")
 
                 def get_metric_value(exact_metric_id):
-                    value = best_trial_series.get(exact_metric_id)
-                    print(f"Looking for metric: {exact_metric_id}, value: {value}")
+                    metric = sanitize_metric_id(exact_metric_id)
+                    value = best_trial_series.get(metric)
+                    print(f"Looking for metric: {metric}, value: {value}")
+                    logger.debug(f"Looking for metric: {exact_metric_id}, value: {value}")
                     return pd.to_numeric(value, errors='coerce') if value is not None else None
 
                 # Build the final record with mapped BigQuery column names
@@ -289,12 +302,12 @@ async def main_pipeline():
         print("\nNo valid PPU results found to upload.")
         return
 
-    final_df = pd.DataFrame(all_best_trials_for_upload).head(30)
+    final_df = pd.DataFrame(all_best_trials_for_upload)
     # Restrict DataFrame to only the required columns
     BQ_COLS = [
         'result_id', 'assessment_id', 'athlete_name', 'test_date', 'age_at_test',
         'CONCENTRIC_DURATION_Trial_ms',
-        'ECCENTRIC_BRAKING_RFD_Trial_N_s_',
+        'ECCENTRIC_BRAKING_RFD_Trial_N_s',
         'MEAN_ECCENTRIC_FORCE_Asym_N',
         'MEAN_TAKEOFF_FORCE_Asym_N',
         'PEAK_CONCENTRIC_FORCE_Asym_N',
