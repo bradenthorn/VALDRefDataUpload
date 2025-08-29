@@ -1,8 +1,4 @@
 import pandas as pd
-import numpy as np
-import pandas_gbq
-from google.oauth2 import service_account
-from google.cloud import bigquery
 import uuid
 from datetime import datetime
 import asyncio
@@ -17,6 +13,7 @@ from VALDapiHelpers import (
     process_json_to_pivoted_df,
     get_access_token,
 )
+from bigquery_helpers import upload_to_bigquery, bq_client
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +23,6 @@ logger = logging.getLogger(__name__)
 PROJECT_ID = settings.gcp.project_id
 DATASET_ID = settings.gcp.dataset_id
 TABLE_ID = settings.gcp.imtp_table_id
-CREDENTIALS_FILE = settings.gcp.credentials_file
 FORCEDECKS_URL = settings.vald_api.forcedecks_url
 TENANT_ID = settings.vald_api.tenant_id
 CONCURRENT_REQUESTS = 10 # Number of API calls to make at the same time
@@ -36,19 +32,7 @@ METRIC_PEAK_VERTICAL_FORCE = 'PEAK_VERTICAL_FORCE_Trial_N'
 REQUIRED_METRIC_IDS = [
     METRIC_ISO_BM_REL_FORCE_PEAK,
     METRIC_PEAK_VERTICAL_FORCE,
-]
-# =================================================================================
-# REVISED: Define the schema to include the new columns
-# =================================================================================
-IMTP_RESULTS_SCHEMA = [
-    {'name': 'result_id', 'type': 'STRING'},
-    {'name': 'assessment_id', 'type': 'STRING'},
-    {'name': 'athlete_name', 'type': 'STRING'},
-    {'name': 'test_date', 'type': 'DATE'},
-    {'name': 'age_at_test', 'type': 'INT64'},
-    {'name': 'ISO_BM_REL_FORCE_PEAK_Trial_N_kg', 'type': 'FLOAT64'},
-    {'name': 'PEAK_VERTICAL_FORCE_Trial_N', 'type': 'FLOAT64'}
-]
+]  
 
 # =================================================================================
 # Asynchronous function to fetch a single test result
@@ -95,13 +79,10 @@ async def process_and_upload_all_best_imtp():
     and uploads them to the imtp_results table in BigQuery.
     """
     # --- Step 1: Authentication and Setup (Synchronous) ---
-    try:
-        credentials = service_account.Credentials.from_service_account_file(CREDENTIALS_FILE)
-        print("Successfully loaded GCP credentials.")
-    except Exception as e:
-        print(f"ERROR: Could not load credentials. {e}")
+    if bq_client is None:
+        print("BigQuery client not available. Cannot upload.")
         return
-
+    
     print("Fetching access token...")
     token = get_access_token()
 
@@ -203,18 +184,7 @@ async def process_and_upload_all_best_imtp():
     final_df = pd.DataFrame(all_best_trials_for_upload)
 
     print(f"\nUploading {len(final_df)} total best trials to BigQuery table '{TABLE_ID}'...")
-    try:
-        pandas_gbq.to_gbq(
-            final_df,
-            destination_table=f"{DATASET_ID}.{TABLE_ID}",
-            project_id=PROJECT_ID,
-            credentials=credentials,
-            if_exists='append',
-            table_schema=IMTP_RESULTS_SCHEMA
-        )
-        print("Upload successful!")
-    except Exception as e:
-        print(f"An error occurred during the BigQuery upload: {e}")
+    upload_to_bigquery(final_df, TABLE_ID)
 
 # =================================================================================
 # MAIN EXECUTION

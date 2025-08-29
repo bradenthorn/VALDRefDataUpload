@@ -1,18 +1,15 @@
 import pandas as pd
 import numpy as np
-import pandas_gbq
-from google.oauth2 import service_account
-from google.cloud import bigquery
 import uuid
 from datetime import datetime
 import asyncio
 import aiohttp
-import json
 
 # Import your existing helper functions
 from VALDapiHelpers import get_access_token
-from config import settings
 from VALDapiHelpers import get_profiles, FD_Tests_by_Profile
+from config import settings
+from bigquery_helpers import upload_to_bigquery, bq_client
 
 # =================================================================================
 # CONFIGURATION
@@ -20,23 +17,10 @@ from VALDapiHelpers import get_profiles, FD_Tests_by_Profile
 PROJECT_ID = settings.gcp.project_id
 DATASET_ID = settings.gcp.dataset_id
 TABLE_ID = settings.gcp.hj_table_id
-CREDENTIALS_FILE = settings.gcp.credentials_file
 FORCEDECKS_URL = settings.vald_api.forcedecks_url
 TENANT_ID = settings.vald_api.tenant_id
 CONCURRENT_REQUESTS = 10
 DELAY_BETWEEN_BATCHES = 2
-
-# =================================================================================
-# Define the schema for the hj_results table
-# =================================================================================
-HJ_RESULTS_SCHEMA = [
-    {'name': 'result_id', 'type': 'STRING'},
-    {'name': 'assessment_id', 'type': 'STRING'},
-    {'name': 'athlete_name', 'type': 'STRING'},
-    {'name': 'test_date', 'type': 'DATE'},
-    {'name': 'age_at_test', 'type': 'INT64'},
-    {'name': 'hop_rsi_avg_best_5', 'type': 'FLOAT64'}
-]
 
 # =================================================================================
 # HELPER FUNCTION to process the raw JSON from the API
@@ -94,12 +78,8 @@ async def fetch_and_process_single_test(session, test_id, token):
 # =================================================================================
 async def main_pipeline():
     """Main asynchronous pipeline to fetch, process, and upload all HJ tests."""
-    # --- Step 1: Authentication and Profile Fetching ---
-    try:
-        credentials = service_account.Credentials.from_service_account_file(CREDENTIALS_FILE)
-        print("Successfully loaded GCP credentials.")
-    except Exception as e:
-        print(f"ERROR: Could not load credentials. {e}")
+    if bq_client is None:
+        print("ERROR: BigQuery client not available. Exiting.")
         return
 
     token = get_access_token()
@@ -215,18 +195,7 @@ async def main_pipeline():
     final_df = pd.DataFrame(all_best_rsi_averages)
 
     print(f"\nUploading {len(final_df)} total best HJ results to BigQuery table '{TABLE_ID}'...")
-    try:
-        pandas_gbq.to_gbq(
-            final_df,
-            destination_table=f"{DATASET_ID}.{TABLE_ID}",
-            project_id=PROJECT_ID,
-            credentials=credentials,
-            if_exists='append',
-            table_schema=HJ_RESULTS_SCHEMA
-        )
-        print("Upload successful!")
-    except Exception as e:
-        print(f"An error occurred during the BigQuery upload: {e}")
+    upload_to_bigquery(final_df, TABLE_ID)
 
 # =================================================================================
 # MAIN EXECUTION

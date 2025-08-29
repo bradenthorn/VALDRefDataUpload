@@ -1,8 +1,5 @@
 import pandas as pd
 import numpy as np
-# NOTE: We are no longer using pandas_gbq for the upload
-from google.oauth2 import service_account
-from google.cloud import bigquery
 import uuid
 from datetime import datetime
 import asyncio
@@ -16,6 +13,7 @@ import logging
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from VALDapiHelpers import get_access_token, get_profiles, FD_Tests_by_Profile
 from config import settings
+from bigquery_helpers import upload_to_bigquery, bq_client
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +21,8 @@ logger = logging.getLogger(__name__)
 # CONFIGURATION
 # =================================================================================
 PROJECT_ID = settings.gcp.project_id
-DATASET_ID = "athlete_performance_db"
+DATASET_ID = settings.gcp.dataset_id
 TABLE_ID = settings.gcp.ppu_table_id
-CREDENTIALS_FILE = settings.gcp.credentials_file
 FORCEDECKS_URL = settings.vald_api.forcedecks_url
 TENANT_ID = settings.vald_api.tenant_id
 CONCURRENT_REQUESTS = 10
@@ -65,53 +62,6 @@ METRIC_ID_TO_BQ_COL = {
     sanitize_metric_id('CONCENTRIC_DURATION_Trial_ms'): 'CONCENTRIC_DURATION_Trial_ms',
 }
 
-# =================================================================================
-# Initialize the BigQuery Client globally
-# =================================================================================
-try:
-    credentials = service_account.Credentials.from_service_account_file(CREDENTIALS_FILE)
-    bq_client = bigquery.Client(credentials=credentials, project=PROJECT_ID)
-    print("Successfully loaded GCP credentials and BigQuery client.")
-except Exception as e:
-    print(f"ERROR: Could not load credentials. {e}")
-    bq_client = None
-
-# =================================================================================
-# REWRITTEN: BigQuery Upload Function using the official client library
-# =================================================================================
-def upload_to_bigquery(df, table_name):
-    """
-    Uploads a DataFrame to a specified BigQuery table using the more robust
-    google-cloud-bigquery client library, bypassing the Parquet conversion issue.
-    Restricts columns to those that exist in the BigQuery table schema.
-    """
-    if df.empty:
-        print(f"DataFrame for {table_name} is empty. Skipping upload.")
-        return
-    if bq_client is None:
-        print("BigQuery client not available. Cannot upload.")
-        return False
-
-    table_ref = bq_client.dataset(DATASET_ID).table(table_name)
-    # Fetch existing schema fields
-    table = bq_client.get_table(table_ref)
-    existing_fields = set(field.name for field in table.schema)
-    # Restrict DataFrame to only those columns
-    df = df[[col for col in df.columns if col in existing_fields]]
-    
-    job_config = bigquery.LoadJobConfig(
-        write_disposition="WRITE_APPEND",
-    )
-
-    print(f"\nUploading {len(df)} total best PPU results to BigQuery table '{table_name}'...")
-    try:
-        job = bq_client.load_table_from_dataframe(df, table_ref, job_config=job_config)
-        job.result()  # Wait for the job to complete
-        print("Upload successful!")
-        return True
-    except Exception as e:
-        print(f"An error occurred during the BigQuery upload: {e}")
-        return False
 
 # =================================================================================
 # HELPER FUNCTION to process the raw JSON from the API
@@ -180,6 +130,10 @@ async def fetch_and_process_single_test(session, test_id, token):
 # =================================================================================
 async def main_pipeline():
     """Main asynchronous pipeline to fetch, process, and upload all PPU tests."""
+    if bq_client is None:
+        print("BigQuery client not available. Cannot upload.")
+        return
+
     token = get_access_token()
     print("Fetching all athlete profiles...")
     profiles = get_profiles(token)
