@@ -6,7 +6,7 @@ import aiohttp
 from logging_utils import get_logger
 
 # Import your existing helper functions
-from VALDapiHelpers import get_access_token, get_profiles, FD_Tests_by_Profile
+from VALDapiHelpers import get_access_token, get_profiles, FD_Tests_by_Profile, process_json_to_pivoted_df
 from config import settings
 from bigquery_helpers import upload_to_bigquery, bq_client
 
@@ -56,49 +56,6 @@ METRIC_ID_TO_BQ_COL = {
     sanitize_metric_id('RELATIVE_PEAK_CONCENTRIC_FORCE_Trial_N/kg'): 'RELATIVE_PEAK_CONCENTRIC_FORCE_Trial_N_kg',
     sanitize_metric_id('CONCENTRIC_DURATION_Trial_ms'): 'CONCENTRIC_DURATION_Trial_ms',
 }
-
-
-# =================================================================================
-# HELPER FUNCTION to process the raw JSON from the API
-# =================================================================================
-def process_json_to_pivoted_df(test_data_json):
-    """Takes the raw JSON from a test result and pivots it into a DataFrame."""
-    if not test_data_json or not isinstance(test_data_json, list):
-        return None
-    
-
-
-    all_results = []
-    for trial in test_data_json:
-        results = trial.get("results", [])
-        for res in results:
-            unit_raw = res["definition"].get("unit", "")
-            unit = UNIT_MAP.get(unit_raw, unit_raw)
-            limb = res.get("limb")
-            result_key = res["definition"].get("result", "")
-            # Fix: Avoid duplicate 'Trial' in metric_id
-            if limb == "Trial":
-                metric_id = f"{result_key}_Trial_{unit}"
-            else:
-                metric_id = f"{result_key}_{limb}_Trial_{unit}"
-            metric_id = sanitize_metric_id(metric_id)
-            flat_result = {
-                "value": res.get("value"),
-                "limb": limb,
-                "result_key": result_key,
-                "unit": unit,
-                "metric_id": metric_id
-            }
-            all_results.append(flat_result)
-    if not all_results:
-        return None
-    df = pd.DataFrame(all_results)
-    # Use the precomputed metric_id
-    # df['metric_id'] = (df['result_key'].astype(str) + '_' + df['limb'].astype(str) + '_Trial_' + df['unit'].astype(str))
-    df['trial'] = df.groupby('metric_id').cumcount() + 1
-    pivot = df.pivot_table(index='metric_id', columns='trial', values='value', aggfunc='first')
-    pivot.columns = [f'trial {c}' for c in pivot.columns]
-    return pivot.reset_index()
 
 # =================================================================================
 # Asynchronous function to fetch and process a single test result

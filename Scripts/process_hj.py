@@ -6,7 +6,7 @@ import aiohttp
 from logging_utils import get_logger
 
 # Import your existing helper functions
-from VALDapiHelpers import get_profiles, FD_Tests_by_Profile, get_access_token
+from VALDapiHelpers import get_profiles, FD_Tests_by_Profile, get_access_token, process_json_to_pivoted_df
 from config import settings
 from bigquery_helpers import upload_to_bigquery, bq_client
 
@@ -22,36 +22,6 @@ FORCEDECKS_URL = settings.vald_api.forcedecks_url
 TENANT_ID = settings.vald_api.tenant_id
 CONCURRENT_REQUESTS = 10
 DELAY_BETWEEN_BATCHES = 2
-
-# =================================================================================
-# HELPER FUNCTION to process the raw JSON from the API
-# =================================================================================
-def process_json_to_pivoted_df(test_data_json):
-    """Takes the raw JSON from a test result and pivots it into a DataFrame."""
-    if not test_data_json or not isinstance(test_data_json, list):
-        return None
-
-    all_results = []
-    for trial in test_data_json:
-        results = trial.get("results", [])
-        for res in results:
-            flat_result = {
-                "value": res.get("value"),
-                "limb": res.get("limb"),
-                "result_key": res["definition"].get("result", ""),
-                "unit": res["definition"].get("unit", "")
-            }
-            all_results.append(flat_result)
-
-    if not all_results:
-        return None
-
-    df = pd.DataFrame(all_results)
-    df['metric_id'] = (df['result_key'].astype(str) + '_' + df['limb'].astype(str) + '_Trial_' + df['unit'].astype(str))
-    df['trial'] = df.groupby('metric_id').cumcount() + 1
-    pivot = df.pivot_table(index='metric_id', columns='trial', values='value', aggfunc='first')
-    pivot.columns = [f'trial {c}' for c in pivot.columns]
-    return pivot.reset_index()
 
 # =================================================================================
 # Asynchronous function to fetch and process a single test result
